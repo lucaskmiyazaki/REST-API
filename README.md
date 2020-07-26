@@ -20,3 +20,9 @@ eb create aws-test
 docker build -t app-test .
 
 docker run -p 5000:5000 app-test
+
+
+
+4. Test Api
+
+python3 test.py
