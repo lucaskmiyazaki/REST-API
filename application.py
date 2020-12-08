@@ -1,6 +1,9 @@
 from flask import Flask
 from flask import request, jsonify, make_response
 import json
+import os
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.backends import default_backend
 
 # Elastic Beanstalk looks for an 'application' that is callable by default
 app = Flask(__name__)
@@ -8,23 +11,46 @@ app = Flask(__name__)
 # model
 class Users:
     def __init__(self):
-        self.db = [{"id": 0, "username": "lucas", "email": "example@email.com", "password": "9298976"}]
+        self.db = []
         self.col = ['username', 'email', 'password']
-        self.n_user = 1
+        self.n_user = 0
+        self.salt = os.urandom(16)
+        self.create({"id": 0, "username": "lucas", "email": "example@email.com", "password": "9298976"})
 
     def user_validation(self, user):
         if type(user) != dict:
             return False
         if not (all(key in self.col for key in user.keys()) and all(key in user.keys() for key in self.col)):
             return False
+        if user['username'] in [u['username'] for u in self.db]:
+            return False
         return True
     
     def password_validation(self, user):
         if 'username' in user.keys() and 'password' in user.keys():
             for i in range(len(self.db)):
-                if self.db[i]['username'] == user['username'] and self.db[i]['password'] == user['password']:
-                    return True
+                if self.db[i]['username'] == user['username']:
+                    kdf = Scrypt(salt=self.salt, length=32, n=2**14, r=8, p=1, backend=default_backend())
+                    try:
+                        kdf.verify(str(user['password']).encode(), self.db[i]['password_digest'])
+                        return True
+                    except:
+                        pass
         return False
+
+    def filter_query(self, data):
+        if 'users' in data.keys():
+            users = []
+            for user in data['users']:
+                users.append(self.filter_query(user))
+            return {'users': users}
+        else: user = data
+
+        response = {}
+        for key in user:
+            if key != 'password_digest':
+                response[key] = user[key]
+        return response
 
     def create(self, user, nid=None):
         if nid == None:
@@ -34,9 +60,17 @@ class Users:
         if not self.user_validation(user):
             return False, "invalid JSON" 
 
-        user['id'] = nid
-        self.db.append(user)
-        return True, user
+        new_user = {}
+        new_user['id'] = nid
+        new_user['username'] = user['username']
+        new_user['email'] = user['email']
+
+        kdf = Scrypt(salt=self.salt, length=32, n=2**14, r=8, p=1, backend=default_backend())
+        old = new_user
+        new_user['password_digest'] = kdf.derive(str(user['password']).encode())
+
+        self.db.append(new_user)
+        return True, self.filter_query(new_user)
 
     def find(self, nid):
         for i in range(len(self.db)):
@@ -49,14 +83,14 @@ class Users:
     def read(self, nid=None):
         if nid == None:
             data = {"users": self.db}
-            return True, data 
+            return True, self.filter_query(data) 
 
         user, index = self.find(nid)
 
         if not user:
             return False, "id not found" 
 
-        return True, user 
+        return True, self.filter_query(user) 
 
     def delete(self, nid):
         user, index = self.find(nid)
@@ -65,7 +99,7 @@ class Users:
             return False, "id not found" 
 
         self.db.pop(index)
-        return True, user #data, 200
+        return True, user
 
     def update(self, user, nid):
         success, content = self.delete(nid)
@@ -131,7 +165,7 @@ def user(nid):
 def login():
     content = request.json
 
-    if password_validation(content):
+    if users_db.password_validation(content):
         return jsonify({"login": True}), 200
     else: return jsonify({"login": False}), 200
 
