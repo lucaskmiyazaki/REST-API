@@ -1,112 +1,12 @@
 from flask import Flask
 from flask import request, jsonify, make_response
 import json
-import os
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.backends import default_backend
+from model.users import Users
+from encrypt import EncryptionManager
 
 # Elastic Beanstalk looks for an 'application' that is callable by default
 app = Flask(__name__)
 
-# model
-class Users:
-    def __init__(self):
-        self.db = []
-        self.col = ['username', 'email', 'password']
-        self.n_user = 0
-        self.salt = os.urandom(16)
-        _success, _user = self.create({"username": "lucas", "email": "example@email.com", "password": "9298976"})
-
-    def user_validation(self, user):
-        if type(user) != dict:
-            return False
-        if not (all(key in self.col for key in user.keys()) and all(key in user.keys() for key in self.col)):
-            return False
-        if user['username'] in [u['username'] for u in self.db]:
-            return False
-        if type(user['password']) != str:
-            return False
-        return True
-    
-    def password_validation(self, user):
-        if 'username' in user.keys() and 'password' in user.keys():
-            for i in range(len(self.db)):
-                if self.db[i]['username'] == user['username']:
-                    kdf = Scrypt(salt=self.salt, length=32, n=2**14, r=8, p=1, backend=default_backend())
-                    try:
-                        kdf.verify(user['password'].encode(), self.db[i]['password_digest'])
-                        return True, self.db[i]
-                    except:
-                        pass
-        return False, None
-
-    def filter_query(self, data):
-        if 'users' in data.keys():
-            users = []
-            for user in data['users']:
-                users.append(self.filter_query(user))
-            return {'users': users}
-        else: user = data
-
-        response = {}
-        for key in user:
-            if key != 'password_digest':
-                response[key] = user[key]
-        return response
-
-    def create(self, user, nid=None):
-        if nid == None:
-            nid = self.n_user
-            self.n_user += 1
-
-        if not self.user_validation(user):
-            return False, "invalid JSON" 
-
-        new_user = {}
-        new_user['id'] = nid
-        new_user['username'] = user['username']
-        new_user['email'] = user['email']
-
-        kdf = Scrypt(salt=self.salt, length=32, n=2**14, r=8, p=1, backend=default_backend())
-        new_user['password_digest'] = kdf.derive(user['password'].encode())
-
-        self.db.append(new_user)
-        return True, self.filter_query(new_user)
-
-    def find(self, nid):
-        for i in range(len(self.db)):
-            if self.db[i]['id'] == nid:
-                user = self.db[i]
-                index = i
-                return user, index
-        return None, None
-
-    def read(self, nid=None):
-        if nid == None:
-            data = {"users": self.db}
-            return True, self.filter_query(data) 
-
-        user, index = self.find(nid)
-
-        if not user:
-            return False, "id not found" 
-
-        return True, self.filter_query(user) 
-
-    def delete(self, nid):
-        user, index = self.find(nid)
-
-        if not user:
-            return False, "id not found" 
-
-        self.db.pop(index)
-        return True, user
-
-    def update(self, user, nid):
-        success, content = self.delete(nid)
-        if success:
-            return self.create(user, nid)
-        else: return content
 
 # helper functions
 def error_message(message):
@@ -120,6 +20,7 @@ def error_message(message):
     return jsonify({"error_message": message}), code
 
 users_db = Users()
+manager = EncryptionManager()
 
 # Flask endpoints
 @app.route('/')
@@ -177,13 +78,17 @@ def fake_login():
         success, user = users_db.password_validation(content)
         if success:
             resp = make_response(jsonify({"login": True}), 200)
-            resp.set_cookie('user_id', str(user['id']).encode())
+            secret_id = manager.updateEncryptor(str(user['id'])) 
+            manager.finalizeEncryptor()
+            resp.set_cookie('user_id', secret_id)
             return resp
         else: return jsonify({"login": False}), 200
 
 @app.route('/welcome', methods=['GET'])
 def welcome():
-    nid = request.cookies.get('user_id')
+    secret_id = request.cookies.get('user_id')
+    nid = manager.updateDecryptor(secret_id)
+    manager.finalizeDecryptor()
     if nid != None:
         nid = int(nid)
         success, user = users_db.read(nid)
