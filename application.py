@@ -87,9 +87,9 @@ def fake_login():
 @app.route('/welcome', methods=['GET'])
 def welcome():
     secret_id = request.cookies.get('user_id')
-    nid = manager.updateDecryptor(secret_id)
-    manager.finalizeDecryptor()
-    if nid != None:
+    if secret_id != None:
+        nid = manager.updateDecryptor(secret_id)
+        manager.finalizeDecryptor()
         nid = int(nid)
         success, user = users_db.read(nid)
         if success: return "Hello %s"%user['username']
